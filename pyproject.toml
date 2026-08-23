@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "australian-retail-rag"
+version = "0.1.0"
+description = "A small, explainable RAG starter for Australian retail public data."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+]
+llm = ["anthropic>=0.60"]
+pdf = ["pypdf>=5.0"]
+dev = ["pytest>=8.0"]
+all = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "anthropic>=0.60",
+  "pypdf>=5.0",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+retail-rag = "retail_rag.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
