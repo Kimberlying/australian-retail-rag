@@ -4,11 +4,10 @@ import json
 import math
 import re
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from .models import DocumentChunk, RetrievedChunk
-
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:['-][A-Za-z0-9_]+)*|[\u4e00-\u9fff]")
 
@@ -40,10 +39,7 @@ class TfidfRetriever:
         for chunk in self.chunks:
             counts = Counter(tokenize(chunk.text))
             total_terms = max(sum(counts.values()), 1)
-            vector = {
-                term: (count / total_terms) * idf[term]
-                for term, count in counts.items()
-            }
+            vector = {term: (count / total_terms) * idf[term] for term, count in counts.items()}
             self._vectors.append(vector)
 
     def _query_vector(self, query: str) -> dict[str, float]:
@@ -75,7 +71,7 @@ class TfidfRetriever:
         query_vector = self._query_vector(query)
         scored = [
             RetrievedChunk(chunk=chunk, score=self._cosine(query_vector, vector))
-            for chunk, vector in zip(self.chunks, self._vectors)
+            for chunk, vector in zip(self.chunks, self._vectors, strict=True)
         ]
         scored.sort(key=lambda item: item.score, reverse=True)
         return [item for item in scored[:top_k] if item.score > 0]
@@ -94,7 +90,7 @@ class TfidfRetriever:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @classmethod
-    def load(cls, path: Path) -> "TfidfRetriever":
+    def load(cls, path: Path) -> TfidfRetriever:
         payload = json.loads(path.read_text(encoding="utf-8"))
         chunks = [DocumentChunk(**item) for item in payload]
         return cls(chunks)

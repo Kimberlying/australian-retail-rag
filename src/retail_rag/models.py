@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+GeneratedBy = Literal["claude", "local", "local_fallback"]
 
 
 @dataclass(frozen=True)
@@ -24,3 +26,7 @@ class Answer:
     answer: str
     citations: list[dict[str, Any]]
     retrievals: list[RetrievedChunk]
+    generated_by: GeneratedBy = "local"
+    refused: bool = False
+    latency_ms: dict[str, float] = field(default_factory=dict)
+    usage: dict[str, int] = field(default_factory=dict)

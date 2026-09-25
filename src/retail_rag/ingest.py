@@ -7,7 +7,6 @@ from .chunking import chunk_text
 from .models import DocumentChunk
 from .retrieval import TfidfRetriever
 
-
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".txt", ".markdown"}
 
 
@@ -16,7 +15,7 @@ def _read_file(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".pdf":
         try:
-            from pypdf import PdfReader
+            from pypdf import PdfReader  # noqa: PLC0415 - optional dependency
         except ImportError as exc:
             raise RuntimeError(
                 "PDF support is optional. Install it with: python -m pip install -e '.[pdf]'"
@@ -26,7 +25,9 @@ def _read_file(path: Path) -> str:
     raise ValueError(f"Unsupported file type: {path.suffix}")
 
 
-def load_chunks(documents_dir: Path) -> list[DocumentChunk]:
+def load_chunks(
+    documents_dir: Path, *, chunk_size: int = 900, overlap: int = 120
+) -> list[DocumentChunk]:
     if not documents_dir.exists():
         raise FileNotFoundError(f"Documents directory does not exist: {documents_dir}")
 
@@ -38,9 +39,9 @@ def load_chunks(documents_dir: Path) -> list[DocumentChunk]:
             continue
         text = _read_file(path)
         relative_source = path.relative_to(documents_dir).as_posix()
-        for index, piece in enumerate(chunk_text(text)):
+        for index, piece in enumerate(chunk_text(text, chunk_size=chunk_size, overlap=overlap)):
             raw_id = f"{relative_source}:{index}:{piece}"
-            chunk_id = hashlib.sha1(raw_id.encode("utf-8")).hexdigest()[:12]
+            chunk_id = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:12]
             chunks.append(
                 DocumentChunk(
                     chunk_id=chunk_id,
@@ -52,8 +53,10 @@ def load_chunks(documents_dir: Path) -> list[DocumentChunk]:
     return chunks
 
 
-def build_index(documents_dir: Path, index_path: Path) -> TfidfRetriever:
-    chunks = load_chunks(documents_dir)
+def build_index(
+    documents_dir: Path, index_path: Path, *, chunk_size: int = 900, overlap: int = 120
+) -> TfidfRetriever:
+    chunks = load_chunks(documents_dir, chunk_size=chunk_size, overlap=overlap)
     if not chunks:
         raise RuntimeError(f"No supported documents found in {documents_dir}")
     retriever = TfidfRetriever(chunks)
