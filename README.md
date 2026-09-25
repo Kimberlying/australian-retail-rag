@@ -1,5 +1,7 @@
 # Australian Retail RAG
 
+[![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
+[![简体中文](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-lightgrey.svg)](README.zh-CN.md)
 [![CI](https://github.com/kimberlying/australian-retail-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/kimberlying/australian-retail-rag/actions/workflows/ci.yml)
 
 A retrieval-augmented generation (RAG) system for Australian retail, built around evaluation. It uses public Australian company material alongside clearly labelled synthetic retail data.
@@ -24,7 +26,7 @@ It is an independent portfolio project. It is **not a Coles system, customer pro
                                                                      │
                             evidence gate: best dense similarity < 0.52 ? ──┬── yes ──► refuse (no LLM call)
                                                                             │
-                                                  └── evidence ──► Claude (XML-wrapped context)
+                                                                            └── no ───► Claude (XML-wrapped context)
                                                                      │   └── error ─► local preview
                                                                      ▼
                                                    answer + citations + latency + token usage
@@ -108,7 +110,7 @@ With 55 questions, one question is worth about 2 points of any metric. Treat dif
 
 | Concern | Implementation |
 |---|---|
-| Dependencies | `uv` + committed `uv.lock`; optional extras `api`, `llm`, `pdf`, `dev` |
+| Dependencies | `uv` + committed `uv.lock`; optional extras `api`, `llm`, `pdf`, `embeddings`, `dev` |
 | Config | `pydantic-settings` with validation (`src/retail_rag/config.py`); secrets are held as `SecretStr` |
 | Quality | `ruff` (lint + format + bandit rules), `mypy --strict`, `pre-commit` |
 | Tests | 91 pytest tests covering unit, API, CLI, eval, and retrievers. Claude and the embedding model are faked, so the suite is offline and deterministic. One integration test runs the real bge-small model in CI. The CI coverage gate is 85% |
