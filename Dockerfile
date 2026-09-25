@@ -26,6 +26,9 @@ FROM python:3.12-slim AS runtime
 RUN groupadd --system app && useradd --system --gid app --home /app app
 
 WORKDIR /app
+# /app itself is root-owned; pre-create only the paths the app user writes to
+# (index + embeddings at build time, model cache).
+RUN install -d -o app -g app /app/data /app/data/index /app/.cache
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app data/documents ./data/documents
 
