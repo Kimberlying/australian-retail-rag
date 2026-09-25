@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-import json
 import math
-import re
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
-from .models import DocumentChunk, RetrievedChunk
-
-
-TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:['-][A-Za-z0-9_]+)*|[\u4e00-\u9fff]")
-
-
-def tokenize(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text)]
+from ..models import DocumentChunk, RetrievedChunk
+from .base import load_chunk_file, rank, save_chunks, tokenize
 
 
 class TfidfRetriever:
-    """A small persistent sparse-vector retriever for the first project version."""
+    """Sparse TF-IDF cosine retriever: the dependency-free baseline.
+
+    Kept deliberately unchanged (no stopwords, no stemming) so it remains a
+    stable reference point in the evaluation reports.
+    """
+
+    name = "tfidf"
+    default_min_score = 0.05
 
     def __init__(self, chunks: Iterable[DocumentChunk]):
         self.chunks = list(chunks)
@@ -40,10 +39,7 @@ class TfidfRetriever:
         for chunk in self.chunks:
             counts = Counter(tokenize(chunk.text))
             total_terms = max(sum(counts.values()), 1)
-            vector = {
-                term: (count / total_terms) * idf[term]
-                for term, count in counts.items()
-            }
+            vector = {term: (count / total_terms) * idf[term] for term, count in counts.items()}
             self._vectors.append(vector)
 
     def _query_vector(self, query: str) -> dict[str, float]:
@@ -69,32 +65,17 @@ class TfidfRetriever:
             return 0.0
         return dot / (left_norm * right_norm)
 
-    def search(self, query: str, *, top_k: int = 4) -> list[RetrievedChunk]:
-        if top_k <= 0:
-            return []
+    def score_all(self, query: str) -> list[float]:
         query_vector = self._query_vector(query)
-        scored = [
-            RetrievedChunk(chunk=chunk, score=self._cosine(query_vector, vector))
-            for chunk, vector in zip(self.chunks, self._vectors)
-        ]
-        scored.sort(key=lambda item: item.score, reverse=True)
-        return [item for item in scored[:top_k] if item.score > 0]
+        return [self._cosine(query_vector, vector) for vector in self._vectors]
+
+    def search(self, query: str, *, top_k: int = 4) -> list[RetrievedChunk]:
+        scores = self.score_all(query)
+        return rank(self.chunks, scores, top_k=top_k, relevance=scores)
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = [
-            {
-                "chunk_id": chunk.chunk_id,
-                "source": chunk.source,
-                "text": chunk.text,
-                "metadata": chunk.metadata,
-            }
-            for chunk in self.chunks
-        ]
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_chunks(self.chunks, path)
 
     @classmethod
-    def load(cls, path: Path) -> "TfidfRetriever":
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        chunks = [DocumentChunk(**item) for item in payload]
-        return cls(chunks)
+    def load(cls, path: Path) -> TfidfRetriever:
+        return cls(load_chunk_file(path))

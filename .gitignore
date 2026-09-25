@@ -7,3 +7,12 @@ __pycache__/
 data/index/
 data/raw/
 *.log
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+reports/
+*.egg-info/
+.cache/
+build/
+dist/
