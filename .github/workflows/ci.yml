@@ -31,6 +31,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          # Type-check against the minimum supported Python (mypy's python_version).
+          # Newer interpreters resolve newer numpy whose stubs use 3.12-only syntax.
+          python-version: "3.11"
       - run: uv sync --frozen --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
