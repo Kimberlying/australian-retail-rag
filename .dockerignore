@@ -14,3 +14,4 @@ data/raw
 reports
 tests
 evals
+.cache

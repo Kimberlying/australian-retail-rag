@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .chunking import chunk_text
+from .config import Settings, get_settings
 from .models import DocumentChunk
-from .retrieval import TfidfRetriever
+from .retrieval import Retriever, create_retriever, embeddings_cache_path, save_chunks
+
+if TYPE_CHECKING:
+    from .retrieval.embeddings import Embedder
 
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".txt", ".markdown"}
 
@@ -54,11 +59,24 @@ def load_chunks(
 
 
 def build_index(
-    documents_dir: Path, index_path: Path, *, chunk_size: int = 900, overlap: int = 120
-) -> TfidfRetriever:
-    chunks = load_chunks(documents_dir, chunk_size=chunk_size, overlap=overlap)
+    documents_dir: Path,
+    index_path: Path,
+    settings: Settings | None = None,
+    *,
+    embedder: Embedder | None = None,
+) -> Retriever:
+    """Chunk the documents, persist them, and build (and cache) the configured retriever."""
+    settings = settings or get_settings()
+    chunks = load_chunks(
+        documents_dir, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap
+    )
     if not chunks:
         raise RuntimeError(f"No supported documents found in {documents_dir}")
-    retriever = TfidfRetriever(chunks)
-    retriever.save(index_path)
-    return retriever
+    save_chunks(chunks, index_path)
+    return create_retriever(
+        settings.retriever,
+        chunks,
+        settings,
+        cache_path=embeddings_cache_path(index_path),
+        embedder=embedder,
+    )

@@ -37,6 +37,7 @@ class ExampleResult(BaseModel):
     answer: str
     generated_by: str
     refused: bool
+    top_relevance: float | None = None
     answer_correct: bool | None = None
     citation_validity: float | None = None
     faithfulness: float | None = None
@@ -103,6 +104,7 @@ def evaluate_example(
         answer=answer.answer,
         generated_by=answer.generated_by,
         refused=answer.refused,
+        top_relevance=answer.evidence_score,
         latency_ms=answer.latency_ms.get("total", 0.0),
         input_tokens=answer.usage.get("input_tokens", 0),
         output_tokens=answer.usage.get("output_tokens", 0),
@@ -188,12 +190,25 @@ def run_evaluation(
     )
 
 
-def check_thresholds(summary: dict[str, float], thresholds: dict[str, float]) -> list[str]:
-    """Return human-readable failures for every metric below its minimum."""
+def check_thresholds(
+    summary: dict[str, float],
+    minimums: dict[str, float],
+    maximums: dict[str, float] | None = None,
+) -> list[str]:
+    """Return human-readable failures for metrics outside their allowed range.
+
+    ``minimums`` suit higher-is-better metrics (recall); ``maximums`` suit
+    lower-is-better ones (false refusal rate, latency).
+    """
     failures = []
-    for name, minimum in thresholds.items():
+    for name, minimum in minimums.items():
         if name not in summary:
             failures.append(f"{name}: not measured in this run (required >= {minimum})")
         elif summary[name] < minimum:
             failures.append(f"{name}: {summary[name]:.4f} < required {minimum:.4f}")
+    for name, maximum in (maximums or {}).items():
+        if name not in summary:
+            failures.append(f"{name}: not measured in this run (required <= {maximum})")
+        elif summary[name] > maximum:
+            failures.append(f"{name}: {summary[name]:.4f} > allowed {maximum:.4f}")
     return failures

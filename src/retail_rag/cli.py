@@ -10,7 +10,7 @@ from .config import REPO_ROOT, get_settings
 from .ingest import build_index, load_chunks
 from .logging_config import configure_logging
 from .pipeline import RAGPipeline
-from .retrieval import TfidfRetriever
+from .retrieval import create_retriever
 
 DEFAULT_GOLDEN_SET = REPO_ROOT / "evals" / "golden_set.jsonl"
 DEFAULT_REPORT_DIR = REPO_ROOT / "reports"
@@ -51,7 +51,15 @@ def _parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--k", type=int, default=settings.top_k)
     eval_parser.add_argument("--chunk-size", type=int, default=settings.chunk_size)
     eval_parser.add_argument("--chunk-overlap", type=int, default=settings.chunk_overlap)
-    eval_parser.add_argument("--min-score", type=float, default=settings.min_score)
+    eval_parser.add_argument(
+        "--retriever", choices=["tfidf", "bm25", "dense", "hybrid"], default=settings.retriever
+    )
+    eval_parser.add_argument(
+        "--min-score",
+        type=float,
+        default=settings.min_score,
+        help="Evidence-gate threshold (default: the retriever's calibrated default)",
+    )
     eval_parser.add_argument("--output-dir", type=Path, default=DEFAULT_REPORT_DIR)
     eval_parser.add_argument("--stem", default="eval", help="Report file name stem")
     eval_parser.add_argument(
@@ -64,6 +72,14 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         metavar="METRIC=VALUE",
         help="Exit non-zero if a summary metric is below VALUE (repeatable)",
+    )
+    eval_parser.add_argument(
+        "--fail-over",
+        type=_threshold,
+        action="append",
+        default=[],
+        metavar="METRIC=VALUE",
+        help="Exit non-zero if a summary metric is above VALUE (repeatable)",
     )
     return parser
 
@@ -83,7 +99,8 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     examples = load_golden_set(args.golden, docs_dir=args.docs)
     # Build a fresh in-memory index so every run is reproducible from source documents.
     chunks = load_chunks(args.docs, chunk_size=args.chunk_size, overlap=args.chunk_overlap)
-    pipeline = RAGPipeline(TfidfRetriever(chunks), settings)
+    retriever = create_retriever(args.retriever, chunks, settings)
+    pipeline = RAGPipeline(retriever, settings)
 
     judge = None
     if args.judge:
@@ -97,10 +114,13 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         k=args.k,
         judge=judge,
         config={
-            "retriever": "tfidf",
+            "retriever": retriever.name,
+            "embedding_model": (
+                settings.embedding_model if args.retriever in ("dense", "hybrid") else None
+            ),
             "chunk_size": args.chunk_size,
             "chunk_overlap": args.chunk_overlap,
-            "min_score": args.min_score,
+            "min_score": pipeline.min_score,
             "n_chunks": len(chunks),
             "model": settings.anthropic_model if settings.llm_enabled else None,
         },
@@ -109,13 +129,13 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     print(render_markdown(report))
     print(f"Reports written to {json_path} and {md_path}")
 
-    failures = check_thresholds(report.summary, dict(args.fail_under))
+    failures = check_thresholds(report.summary, dict(args.fail_under), dict(args.fail_over))
     if failures:
         print("\nQuality gate FAILED:", file=sys.stderr)
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         return 1
-    if args.fail_under:
+    if args.fail_under or args.fail_over:
         print("Quality gate passed.")
     return 0
 
@@ -126,10 +146,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911 - one exit code
     settings = get_settings()
 
     if args.command == "ingest":
-        retriever = build_index(
-            args.docs, args.index, chunk_size=settings.chunk_size, overlap=settings.chunk_overlap
-        )
-        print(f"Indexed {len(retriever.chunks)} chunks -> {args.index}")
+        retriever = build_index(args.docs, args.index, settings)
+        print(f"Indexed {len(retriever.chunks)} chunks with {retriever.name} -> {args.index}")
         return 0
 
     if args.command == "query":

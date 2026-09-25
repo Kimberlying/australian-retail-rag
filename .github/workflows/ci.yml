@@ -18,6 +18,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Shared across jobs so the embedding model (bge-small, ~70 MB) is downloaded once and cached.
+  RAG_EMBEDDING_CACHE_DIR: ${{ github.workspace }}/.cache/fastembed
+
 jobs:
   lint:
     name: Lint & type-check
@@ -46,7 +50,13 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python }}
       - run: uv sync --frozen --all-extras
+      - uses: actions/cache@v4
+        with:
+          path: .cache/fastembed
+          key: fastembed-bge-small-en-v1.5
       - run: uv run pytest --cov --cov-report=term --cov-fail-under=85
+        env:
+          RAG_TEST_REAL_MODEL: "1"
 
   eval:
     name: Retrieval quality gate
@@ -57,14 +67,20 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --all-extras
-      # Thresholds sit just under the committed baseline (evals/baselines/) so a
-      # retrieval regression fails the build; raise them as the system improves.
-      - name: Run golden-set evaluation
+      - uses: actions/cache@v4
+        with:
+          path: .cache/fastembed
+          key: fastembed-bge-small-en-v1.5
+      # Gates sit just under the committed hybrid baseline (evals/baselines/) so a
+      # retrieval or refusal regression fails the build; raise them as the system improves.
+      - name: Run golden-set evaluation (hybrid retriever)
         run: >
-          uv run retail-rag eval
-          --fail-under hit_rate=0.90
-          --fail-under recall=0.90
-          --fail-under mrr=0.85
+          uv run retail-rag eval --retriever hybrid
+          --fail-under hit_rate=0.95
+          --fail-under recall=0.93
+          --fail-under mrr=0.90
+          --fail-under refusal_accuracy=0.25
+          --fail-over false_refusal_rate=0.0
       - name: Publish report to job summary
         if: always()
         run: cat reports/eval.md >> "$GITHUB_STEP_SUMMARY"
@@ -86,6 +102,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --all-extras
+      - uses: actions/cache@v4
+        with:
+          path: .cache/fastembed
+          key: fastembed-bge-small-en-v1.5
       - name: Run evaluation with generation and LLM judge
         run: >
           uv run retail-rag eval --judge --stem eval-claude

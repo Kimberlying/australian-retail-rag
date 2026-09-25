@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import metrics
+
 if TYPE_CHECKING:
     from .runner import EvalReport
 
@@ -69,6 +71,8 @@ def render_markdown(report: EvalReport) -> str:
         cells = [_fmt(stats.get(column)) for column in _CATEGORY_COLUMNS]
         lines.append(f"| {name} | " + " | ".join(cells) + " |")
 
+    lines += _render_refusal_sweep(report)
+
     failures = [item for item in report.results if not item.passed]
     lines += ["", f"## Failures ({len(failures)})", ""]
     if not failures:
@@ -90,6 +94,41 @@ def render_markdown(report: EvalReport) -> str:
             f"Top hit: `{top}`. Q: _{item.question}_"
         )
     return "\n".join(lines) + "\n"
+
+
+_SWEEP_THRESHOLDS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]
+
+
+def _render_refusal_sweep(report: EvalReport) -> list[str]:
+    """Show how an evidence-gate threshold trades refusals against false refusals."""
+    scored = [item for item in report.results if item.top_relevance is not None]
+    if not scored:
+        return []
+    answerable = [item.top_relevance or 0.0 for item in report.results if item.answerable]
+    unanswerable = [item.top_relevance or 0.0 for item in report.results if not item.answerable]
+    if not unanswerable:
+        return []
+    gate = report.config.get("min_score")
+    lines = [
+        "",
+        "## Evidence-gate threshold sweep",
+        "",
+        "Best-chunk relevance per question, measured before the gate. A question is",
+        f"refused when it falls below the threshold (this run: `{gate}`).",
+        "",
+        f"- Answerable: min {min(answerable):.3f}, median {metrics.percentile(answerable, 50):.3f}",
+        f"- Unanswerable: max {max(unanswerable):.3f}, "
+        f"median {metrics.percentile(unanswerable, 50):.3f}",
+        "",
+        "| Threshold | Refusal accuracy | False refusal rate |",
+        "|---|---|---|",
+    ]
+    for row in metrics.refusal_sweep(answerable, unanswerable, _SWEEP_THRESHOLDS):
+        lines.append(
+            f"| {row['threshold']:.2f} | {row['refusal_accuracy']:.3f} "
+            f"| {row['false_refusal_rate']:.3f} |"
+        )
+    return lines
 
 
 def write_reports(report: EvalReport, output_dir: Path, *, stem: str = "eval") -> tuple[Path, Path]:

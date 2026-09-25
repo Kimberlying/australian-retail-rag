@@ -220,3 +220,19 @@ class TestClaudeModeEvaluation:
 
         with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
             FaithfulnessJudge(settings)
+
+
+def test_check_thresholds_maximums() -> None:
+    summary = {"false_refusal_rate": 0.1}
+    assert check_thresholds(summary, {}, {"false_refusal_rate": 0.1}) == []
+    failures = check_thresholds(summary, {}, {"false_refusal_rate": 0.05, "latency_p95_ms": 9})
+    assert failures == [
+        "false_refusal_rate: 0.1000 > allowed 0.0500",
+        "latency_p95_ms: not measured in this run (required <= 9)",
+    ]
+
+
+def test_eval_cli_fail_over(tmp_path: Path) -> None:
+    args = ["eval", "--output-dir", str(tmp_path)]
+    assert main([*args, "--fail-over", "false_refusal_rate=0.0"]) == 0
+    assert main([*args, "--fail-over", "pass_rate=0.5"]) == 1

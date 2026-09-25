@@ -1,9 +1,9 @@
 # RAG evaluation report
 
-- **Created:** 2026-09-25T03:03:56+00:00
-- **Git SHA:** `3efe556` · **version:** 0.2.0
+- **Created:** 2026-09-25T03:40:15+00:00
+- **Git SHA:** `cc85b3b` · **version:** 0.3.0
 - **Generation mode:** local
-- **Config:** `k=4`, `retriever=tfidf`, `chunk_size=900`, `chunk_overlap=120`, `min_score=0.05`, `n_chunks=15`, `model=None`
+- **Config:** `k=4`, `retriever=tfidf`, `embedding_model=None`, `chunk_size=900`, `chunk_overlap=120`, `min_score=0.05`, `n_chunks=15`, `model=None`
 
 > Generation ran in local-preview mode (no `ANTHROPIC_API_KEY`), so answer
 > metrics reflect retrieved evidence only and refusals come solely from the
@@ -17,13 +17,13 @@
 | Recall@k | 0.932 |
 | MRR | 0.917 |
 | nDCG@k | 0.954 |
-| Precision@k | 0.365 |
+| Precision@k | 0.295 |
 | Answer accuracy | 0.973 |
 | Refusal accuracy (unanswerable) | 0.000 |
 | False refusal rate (answerable) | 0.000 |
 | Overall pass rate | 0.764 |
-| Latency p50 (ms) | 0.090 |
-| Latency p95 (ms) | 0.290 |
+| Latency p50 (ms) | 0.110 |
+| Latency p95 (ms) | 0.150 |
 
 ## By category
 
@@ -34,6 +34,29 @@
 | public_fact | 7 | 1.000 | 1.000 | 1.000 | - | 1.000 |
 | synthetic_policy | 24 | 1.000 | 1.000 | 0.958 | - | 1.000 |
 | unanswerable | 11 | - | - | - | 0.000 | 0.000 |
+
+## Evidence-gate threshold sweep
+
+Best-chunk relevance per question, measured before the gate. A question is
+refused when it falls below the threshold (this run: `0.05`).
+
+- Answerable: min 0.148, median 0.309
+- Unanswerable: max 0.361, median 0.253
+
+| Threshold | Refusal accuracy | False refusal rate |
+|---|---|---|
+| 0.00 | 0.000 | 0.000 |
+| 0.10 | 0.091 | 0.000 |
+| 0.20 | 0.455 | 0.068 |
+| 0.30 | 0.636 | 0.432 |
+| 0.40 | 1.000 | 0.773 |
+| 0.50 | 1.000 | 0.977 |
+| 0.55 | 1.000 | 1.000 |
+| 0.60 | 1.000 | 1.000 |
+| 0.65 | 1.000 | 1.000 |
+| 0.70 | 1.000 | 1.000 |
+| 0.75 | 1.000 | 1.000 |
+| 0.80 | 1.000 | 1.000 |
 
 ## Failures (13)
 

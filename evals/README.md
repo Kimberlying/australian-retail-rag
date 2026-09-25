@@ -27,5 +27,5 @@ Labels use evidence substrings rather than chunk ids, so they survive changes to
 When you change the retriever, write a new baseline to `baselines/` so the before/after comparison stays in the repository:
 
 ```bash
-uv run retail-rag eval --output-dir evals/baselines --stem <retriever>_<version>
+uv run retail-rag eval --output-dir evals/baselines --stem <retriever>_local   # or: make compare
 ```

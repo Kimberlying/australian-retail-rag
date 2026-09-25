@@ -7,7 +7,7 @@ from pathlib import Path
 from .config import Settings, get_settings
 from .generation import REFUSAL_TEXT, generate_with_claude, local_preview
 from .models import Answer, GeneratedBy
-from .retrieval import TfidfRetriever
+from .retrieval import Retriever, load_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -17,20 +17,30 @@ def _elapsed_ms(start: float) -> float:
 
 
 class RAGPipeline:
-    def __init__(self, retriever: TfidfRetriever, settings: Settings | None = None):
+    def __init__(self, retriever: Retriever, settings: Settings | None = None):
         self.retriever = retriever
         self.settings = settings or get_settings()
+
+    @property
+    def min_score(self) -> float:
+        """Evidence-gate threshold: explicit setting, else the retriever's calibrated default."""
+        if self.settings.min_score is not None:
+            return self.settings.min_score
+        return self.retriever.default_min_score
 
     def ask(self, question: str, *, top_k: int | None = None) -> Answer:
         k = top_k or self.settings.top_k
         total_start = time.perf_counter()
 
         retrieval_start = time.perf_counter()
-        retrievals = [
-            item
-            for item in self.retriever.search(question, top_k=k)
-            if item.score >= self.settings.min_score
-        ]
+        retrievals = self.retriever.search(question, top_k=k)
+        # Answer-level evidence gate: refuse when even the best chunk is not similar
+        # enough. Individual chunks are not filtered, so a hybrid result that BM25
+        # found by exact term match survives even with modest dense similarity.
+        relevances = [item.relevance for item in retrievals if item.relevance is not None]
+        evidence_score = max(relevances) if relevances else None
+        if evidence_score is not None and evidence_score < self.min_score:
+            retrievals = []
         latency = {"retrieval": _elapsed_ms(retrieval_start)}
 
         generation_start = time.perf_counter()
@@ -60,6 +70,7 @@ class RAGPipeline:
                 "source": item.chunk.source,
                 "chunk_id": item.chunk.chunk_id,
                 "score": round(item.score, 4),
+                "relevance": None if item.relevance is None else round(item.relevance, 4),
             }
             for item in retrievals
         ]
@@ -70,7 +81,8 @@ class RAGPipeline:
                     "generated_by": generated_by,
                     "refused": refused,
                     "n_retrieved": len(retrievals),
-                    "top_score": citations[0]["score"] if citations else 0.0,
+                    "retriever": self.retriever.name,
+                    "evidence_score": evidence_score,
                     "latency_ms": latency["total"],
                     **usage,
                 }
@@ -83,10 +95,12 @@ class RAGPipeline:
             retrievals=retrievals,
             generated_by=generated_by,
             refused=refused,
+            evidence_score=evidence_score,
             latency_ms=latency,
             usage=usage,
         )
 
     @classmethod
     def from_index(cls, index_path: Path, settings: Settings | None = None) -> RAGPipeline:
-        return cls(TfidfRetriever.load(index_path), settings)
+        settings = settings or get_settings()
+        return cls(load_retriever(index_path, settings), settings)

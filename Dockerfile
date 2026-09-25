@@ -13,12 +13,12 @@ WORKDIR /app
 # Dependencies first so this layer is cached until the lockfile changes.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project --extra api --extra llm --extra pdf
+    uv sync --frozen --no-dev --no-install-project --extra api --extra llm --extra pdf --extra embeddings
 
 COPY README.md ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable --extra api --extra llm --extra pdf
+    uv sync --frozen --no-dev --no-editable --extra api --extra llm --extra pdf --extra embeddings
 
 # ---------- runtime: minimal image, non-root user ----------
 FROM python:3.12-slim AS runtime
@@ -33,12 +33,15 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     RAG_DOCS_DIR=/app/data/documents \
     RAG_INDEX_PATH=/app/data/index/index.json \
+    RAG_EMBEDDING_CACHE_DIR=/app/.cache/fastembed \
     LOG_FORMAT=json
 
 USER app
 
-# Bake the index into the image so containers start ready to serve.
+# Bake the index, chunk embeddings, and embedding model into the image so
+# containers start ready to serve and never download anything at runtime.
 RUN retail-rag ingest
+ENV HF_HUB_OFFLINE=1
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

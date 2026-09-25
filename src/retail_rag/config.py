@@ -15,6 +15,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+RetrieverKind = Literal["tfidf", "bm25", "dense", "hybrid"]
+
 
 def _resolve(path: Path) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
@@ -34,8 +36,18 @@ class Settings(BaseSettings):
     chunk_overlap: int = Field(default=120, ge=0, alias="RAG_CHUNK_OVERLAP")
 
     # --- retrieval
+    retriever: RetrieverKind = Field(default="hybrid", alias="RAG_RETRIEVER")
     top_k: int = Field(default=4, ge=1, le=20, alias="RAG_TOP_K")
-    min_score: float = Field(default=0.05, ge=0.0, le=1.0, alias="RAG_MIN_SCORE")
+    min_score: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        alias="RAG_MIN_SCORE",
+        description="Evidence-gate threshold; unset uses the retriever's calibrated default.",
+    )
+    embedding_model: str = Field(default="BAAI/bge-small-en-v1.5", alias="RAG_EMBEDDING_MODEL")
+    embedding_model_path: Path | None = Field(default=None, alias="RAG_EMBEDDING_MODEL_PATH")
+    embedding_cache_dir: Path | None = Field(default=None, alias="RAG_EMBEDDING_CACHE_DIR")
 
     # --- generation
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")

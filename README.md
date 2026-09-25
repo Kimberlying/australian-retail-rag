@@ -8,17 +8,22 @@ It is an independent portfolio project. It is **not a Coles system, customer pro
 
 ## Highlights
 
-- **Evaluation harness:** a 55-question golden set with retrieval metrics (Hit@k, Recall@k, MRR, nDCG, Precision@k) and generation metrics (answer accuracy, refusal accuracy, citation validity, and LLM-as-judge faithfulness). CI fails when retrieval quality drops.
+- **Evaluation harness:** a 55-question golden set with retrieval metrics (Hit@k, Recall@k, MRR, nDCG, Precision@k) and generation metrics (answer accuracy, refusal accuracy, citation validity, and LLM-as-judge faithfulness). CI fails when retrieval or refusal quality drops.
+- **Hybrid retrieval:** BM25 and dense embeddings (`bge-small-en-v1.5`, run locally through ONNX) fused with Reciprocal Rank Fusion. It was chosen over TF-IDF, BM25, and dense-only retrieval by measurement; see the [comparison](#retriever-comparison) below.
+- **Calibrated evidence gate:** off-topic questions are refused before any LLM call, based on a dense-similarity threshold chosen from a threshold sweep in the evaluation report.
 - **Grounded generation with Claude:** evidence is passed to the model as XML, which helps resist prompt injection. Answers include citations, and refusals are machine-detectable. Server-side refusal fallback is enabled, and the system degrades to a local retrieval preview when there is no API key or the API call fails.
 - **Production engineering:** typed settings (pydantic-settings), structured JSON logs with request ids, a FastAPI service that loads the index once at startup with separate liveness and readiness probes, a multi-stage non-root Docker image, a `uv` lockfile, ruff, strict mypy, pytest with coverage, pre-commit, and GitHub Actions.
 
 ## Architecture
 
 ```text
- data/documents/*.md|pdf ──► ingest ──► chunk (size/overlap) ──► TF-IDF index
+ data/documents/*.md|pdf ──► ingest ──► chunk ──► chunks.json + embeddings.npz (bge-small, cached)
                                                                      │
- question ──► retrieve top-k ──► min-score gate ──┬── no evidence ──► refuse (no LLM call)
-                                                  │
+ question ──┬─► BM25 (exact terms, numbers) ──┐
+            └─► dense cosine (paraphrases) ───┴─► RRF fusion ──► top-k
+                                                                     │
+                            evidence gate: best dense similarity < 0.52 ? ──┬── yes ──► refuse (no LLM call)
+                                                                            │
                                                   └── evidence ──► Claude (XML-wrapped context)
                                                                      │   └── error ─► local preview
                                                                      ▼
@@ -34,6 +39,8 @@ make install          # uv sync --all-extras + pre-commit hooks
 make ingest           # build data/index/index.json
 uv run retail-rag query "What was Coles' normalised eCommerce sales growth in FY25?"
 ```
+
+The first `ingest` downloads the embedding model (about 70 MB) and caches the chunk embeddings next to the index. For a fully offline run, set `RAG_RETRIEVER=bm25`; to use a pre-downloaded model directory, set `RAG_EMBEDDING_MODEL_PATH`.
 
 Without `ANTHROPIC_API_KEY` the query returns a local retrieval preview. To get grounded Claude answers:
 
@@ -73,18 +80,29 @@ uv run retail-rag eval --judge --stem claude  # with ANTHROPIC_API_KEY: generati
 
 The golden set format is documented in [`evals/README.md`](evals/README.md). Baseline reports are committed in [`evals/baselines/`](evals/baselines/).
 
-### Current baseline: TF-IDF, local mode
+### Retriever comparison
 
-| | Hit@4 | Recall@4 | MRR | Refusal accuracy |
-|---|---|---|---|---|
-| Literal questions (public + policy) | 1.00 | 1.00 | 0.97 | – |
-| Paraphrased questions | 0.78 | 0.72 | 0.70 | – |
-| Unanswerable (11) | – | – | – | **0.00** |
+All runs use the same 55 questions, `k=4`, local mode, and each retriever's calibrated gate. The full reports are in [`evals/baselines/`](evals/baselines/), and `make compare` regenerates them.
 
-What the baseline shows, and what to build next:
+| Retriever | Hit@4 | Recall@4 | MRR | nDCG@4 | Paraphrase Hit@4 | Refusal accuracy | False refusals | Pass rate | p50 latency |
+|---|---|---|---|---|---|---|---|---|---|
+| TF-IDF (baseline) | 0.955 | 0.932 | 0.917 | 0.954 | 0.778 | 0.000 | 0 | 0.764 | 0.1 ms |
+| BM25 | 0.977 | 0.955 | 0.932 | 0.967 | 0.889 | 0.182 | 0 | 0.818 | 0.03 ms |
+| Dense (bge-small) | 0.955 | 0.955 | 0.884 | 0.922 | 0.889 | 0.273 | 0 | 0.818 | 2.9 ms |
+| **Hybrid (BM25 + dense, RRF)** | **0.977** | **0.955** | **0.932** | **0.969** | **0.889** | **0.273** | **0** | **0.836** | 2.5 ms |
 
-1. **Lexical retrieval breaks on paraphrases.** "freezer" does not match "frozen", and "stealing" does not match "shoplifter". This is the motivation for dense embeddings plus hybrid BM25 and vector search.
-2. **A score threshold cannot provide refusal with TF-IDF.** "What is the capital of France?" scores 0.335, which is higher than several correctly answered questions. When a query shares only stopwords with the vocabulary, its cosine score is inflated. Refusal therefore has to come from the generator (the prompt contract plus `refusal_accuracy` measured in Claude mode), from better retrieval scores, or from a reranker.
+Findings:
+
+1. **Lexical retrieval breaks on paraphrases.** With TF-IDF, "freezer" does not match "frozen". Dense retrieval handles the paraphrase but ranks exact facts lower (MRR 0.884). Hybrid keeps both strengths, and it is the default for that reason.
+2. **BM25 alone is a stronger baseline than TF-IDF.** Stopword removal plus length normalisation lifted paraphrase hit rate from 0.78 to 0.89 without any model, which confirms that TF-IDF was a weak baseline rather than lexical search being inherently weak.
+3. **A similarity threshold separates off-topic questions but not hard negatives.** The [threshold sweep](evals/baselines/hybrid_local.md#evidence-gate-threshold-sweep) shows:
+   - The clearly unrelated questions (capital of France, a poem request, and the prompt injection) score ≤ 0.49, and every answerable question scores ≥ 0.56. The gate sits at 0.52 and refuses those 3 without an LLM call and with zero false refusals.
+   - Near-domain questions pass the gate, because they are retail or finance questions the corpus happens not to cover: "RBA cash rate" scores 0.63 and "Harbourline stores in WA" scores 0.65.
+   - "Coles **FY24** revenue" scores **0.78**, higher than most real answers: it is on topic, and only the year is wrong. TF-IDF could not even separate the off-topic questions, because "What is the capital of France?" scored 0.335 through stopwords alone.
+   - Refusal is therefore layered: the cheap retrieval gate handles off-topic questions, and the generator's refusal contract, measured by `refusal_accuracy` in Claude mode, handles near-domain, wrong-entity, and wrong-period questions.
+4. **The one remaining answerable miss** is a paraphrase: "someone stealing" vs "shoplifter". A cross-encoder reranker is the next lever.
+
+With 55 questions, one question is worth about 2 points of any metric. Treat differences below that as noise, and grow the golden set before tuning fusion weights.
 
 ## Engineering
 
@@ -93,7 +111,7 @@ What the baseline shows, and what to build next:
 | Dependencies | `uv` + committed `uv.lock`; optional extras `api`, `llm`, `pdf`, `dev` |
 | Config | `pydantic-settings` with validation (`src/retail_rag/config.py`); secrets are held as `SecretStr` |
 | Quality | `ruff` (lint + format + bandit rules), `mypy --strict`, `pre-commit` |
-| Tests | 65 pytest tests covering unit, API, CLI, and eval logic; Claude is faked so tests are offline and deterministic; the CI coverage gate is 85% |
+| Tests | 91 pytest tests covering unit, API, CLI, eval, and retrievers. Claude and the embedding model are faked, so the suite is offline and deterministic. One integration test runs the real bge-small model in CI. The CI coverage gate is 85% |
 | CI | lint → tests (py3.11/3.12) → eval gate (report shown in the job summary) → Docker build + smoke test; manual live-Claude eval job |
 | Container | multi-stage build, non-root user, index baked in, `HEALTHCHECK` on `/ready`, JSON logs |
 | Observability | structured logs with `request_id`, per-stage latency, token usage, `generated_by`, `refused` |
@@ -109,7 +127,7 @@ src/retail_rag/
   config.py          typed settings from env / .env
   logging_config.py  text or JSON structured logging
   chunking.py        deterministic chunking
-  retrieval.py       TF-IDF retriever + persistence
+  retrieval/         TF-IDF, BM25, dense, hybrid (RRF) retrievers; embeddings; factory
   ingest.py          markdown/text/PDF ingestion
   generation.py      Claude generation (XML context, refusal contract, fallback)
   pipeline.py        orchestration, score gate, latency/usage tracking
@@ -132,7 +150,8 @@ tests/               pytest suite
 
 1. ~~Evaluation harness with golden set and CI quality gate~~ ✅
 2. ~~Engineering baseline: uv, ruff, mypy, Docker, CI, structured logging~~ ✅
-3. Dense embeddings + pgvector, hybrid BM25/vector retrieval with RRF, and a reranker, compared against the TF-IDF baseline
-4. Layout-aware PDF parsing of real annual reports, with company, year, and page metadata filters
-5. Synthetic orders and inventory in Postgres, a read-only SQL tool, and a RAG / SQL / hybrid router
-6. Tracing (Langfuse/OpenTelemetry), prompt caching, streaming responses, auth and rate limiting
+3. ~~Dense embeddings and hybrid BM25/vector retrieval with RRF, compared against the TF-IDF baseline~~ ✅
+4. Cross-encoder reranker, and pgvector (HNSW) behind the same retriever interface
+5. Layout-aware PDF parsing of real annual reports, with company, year, and page metadata filters
+6. Synthetic orders and inventory in Postgres, a read-only SQL tool, and a RAG / SQL / hybrid router
+7. Tracing (Langfuse/OpenTelemetry), prompt caching, streaming responses, auth and rate limiting

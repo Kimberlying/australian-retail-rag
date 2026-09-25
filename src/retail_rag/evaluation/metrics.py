@@ -82,3 +82,25 @@ def percentile(values: Sequence[float], pct: float) -> float:
 
 def mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+def refusal_sweep(
+    answerable: Sequence[float], unanswerable: Sequence[float], thresholds: Sequence[float]
+) -> list[dict[str, float]]:
+    """Trade-off of an answer-level evidence gate at each candidate threshold.
+
+    Inputs are each question's best retrieval relevance (0 when nothing was
+    retrieved). A question is refused when its best relevance is below the
+    threshold. Returns refusal accuracy on unanswerable questions and the false
+    refusal rate on answerable ones, i.e. the two sides of the operating point.
+    """
+    rows = []
+    for threshold in thresholds:
+        rows.append(
+            {
+                "threshold": threshold,
+                "refusal_accuracy": mean([float(s < threshold) for s in unanswerable]),
+                "false_refusal_rate": mean([float(s < threshold) for s in answerable]),
+            }
+        )
+    return rows

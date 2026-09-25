@@ -13,3 +13,6 @@ data/raw/
 htmlcov/
 reports/
 *.egg-info/
+.cache/
+build/
+dist/

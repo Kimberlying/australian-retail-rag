@@ -1,4 +1,4 @@
-.PHONY: install lint format typecheck test eval check ingest serve docker-build docker-up clean
+.PHONY: install lint format typecheck test eval compare check ingest serve docker-build docker-up clean
 
 install:  ## Install all extras + dev tools from the lockfile
 	uv sync --all-extras
@@ -19,7 +19,14 @@ test:
 	uv run pytest --cov
 
 eval:  ## Golden-set evaluation with the same gate CI uses
-	uv run retail-rag eval --fail-under hit_rate=0.90 --fail-under recall=0.90 --fail-under mrr=0.85
+	uv run retail-rag eval --retriever hybrid \
+		--fail-under hit_rate=0.95 --fail-under recall=0.93 --fail-under mrr=0.90 \
+		--fail-under refusal_accuracy=0.25 --fail-over false_refusal_rate=0.0
+
+compare:  ## Evaluate every retriever and refresh the committed baselines
+	for r in tfidf bm25 dense hybrid; do \
+		uv run retail-rag eval --retriever $$r --output-dir evals/baselines --stem $${r}_local || exit 1; \
+	done
 
 check: lint typecheck test eval  ## Everything CI runs, locally
 

@@ -30,6 +30,7 @@ class Citation(BaseModel):
     source: str
     chunk_id: str
     score: float
+    relevance: float | None = None
 
 
 class QueryResponse(BaseModel):
@@ -38,6 +39,7 @@ class QueryResponse(BaseModel):
     citations: list[Citation]
     generated_by: str
     refused: bool
+    evidence_score: float | None
     latency_ms: dict[str, float]
 
 
@@ -51,7 +53,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.pipeline = RAGPipeline.from_index(settings.index_path, settings)
         logger.info(
             "index loaded",
-            extra={"fields": {"chunks": len(app.state.pipeline.retriever.chunks)}},
+            extra={
+                "fields": {
+                    "chunks": len(app.state.pipeline.retriever.chunks),
+                    "retriever": app.state.pipeline.retriever.name,
+                }
+            },
         )
     else:
         logger.warning("index not found; /query will return 503 until it is built")
@@ -99,6 +106,7 @@ def ready(request: Request) -> dict[str, Any]:
     return {
         "status": "ready",
         "chunks": len(pipeline.retriever.chunks),
+        "retriever": pipeline.retriever.name,
         "llm_enabled": pipeline.settings.llm_enabled,
     }
 
@@ -117,5 +125,6 @@ def query(body: QueryRequest, request: Request) -> QueryResponse:
         citations=[Citation(**citation) for citation in result.citations],
         generated_by=result.generated_by,
         refused=result.refused,
+        evidence_score=result.evidence_score,
         latency_ms=result.latency_ms,
     )
