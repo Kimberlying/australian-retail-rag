@@ -137,7 +137,8 @@ jobs:
           load: true
           tags: australian-retail-rag:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Cache export is an optimisation; a GitHub cache-service error must not fail the build.
+          cache-to: type=gha,mode=max,ignore-error=true
       - name: Smoke test the container
         run: |
           docker run -d --name rag -p 8000:8000 australian-retail-rag:ci
