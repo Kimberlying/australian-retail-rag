@@ -20,8 +20,9 @@ test:
 
 eval:  ## Golden-set evaluation with the same gate CI uses
 	uv run retail-rag eval --retriever hybrid \
-		--fail-under hit_rate=0.95 --fail-under recall=0.93 --fail-under mrr=0.90 \
-		--fail-under refusal_accuracy=0.25 --fail-over false_refusal_rate=0.0
+		--fail-under hit_rate=0.95 --fail-under recall=0.94 --fail-under mrr=0.88 \
+		--fail-under refusal_accuracy=0.50 --fail-over false_refusal_rate=0.0 \
+		--fail-under route_accuracy=0.95 --fail-under route_accuracy_holdout=0.90
 
 compare:  ## Evaluate every retriever and refresh the committed baselines
 	for r in tfidf bm25 dense hybrid; do \

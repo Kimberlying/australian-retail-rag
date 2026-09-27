@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from ..models import DocumentChunk, RetrievedChunk
-from .base import rank
+from .base import MetadataFilter, rank
 from .embeddings import Embedder, Vectors
 
 logger = logging.getLogger(__name__)
@@ -26,10 +26,10 @@ class DenseRetriever:
     """
 
     name = "dense"
-    # Calibrated on the golden set (bge-small-en-v1.5): off-topic questions top out
-    # at 0.49 and answerable ones start at 0.56. Re-check the sweep in the eval
-    # report whenever the model, corpus, or golden set changes.
-    default_min_score = 0.52
+    # Calibrated on the golden set (bge-small-en-v1.5, 12-document corpus): off-topic
+    # questions top out at 0.56 and answerable ones start at 0.59. Re-check the sweep
+    # in the eval report whenever the model, corpus, or golden set changes.
+    default_min_score = 0.575
 
     def __init__(
         self,
@@ -41,6 +41,8 @@ class DenseRetriever:
         self.chunks = list(chunks)
         self.embedder = embedder
         self._matrix = self._load_or_embed(cache_path)
+        self._index = {chunk.chunk_id: position for position, chunk in enumerate(self.chunks)}
+        self._last_query: tuple[str, list[float]] | None = None
 
     def _load_or_embed(self, cache_path: Path | None) -> Vectors:
         chunk_ids = [chunk.chunk_id for chunk in self.chunks]
@@ -69,9 +71,23 @@ class DenseRetriever:
     def score_all(self, query: str) -> list[float]:
         if not self.chunks:
             return []
+        # Hybrid search asks for candidates and then for a few extra similarities
+        # with the same query; memoising the last query embeds it only once.
+        cached = self._last_query  # one read: safe under concurrent requests
+        if cached is not None and cached[0] == query:
+            return cached[1]
         similarities = self._matrix @ self.embedder.embed_query(query)
-        return [float(value) for value in np.clip(similarities, 0.0, 1.0)]
+        scores = [float(value) for value in np.clip(similarities, 0.0, 1.0)]
+        self._last_query = (query, scores)
+        return scores
 
-    def search(self, query: str, *, top_k: int = 4) -> list[RetrievedChunk]:
+    def similarities(self, query: str, chunk_ids: Iterable[str]) -> dict[str, float]:
+        """Cosine similarity of ``query`` to specific chunks (the evidence-gate signal)."""
         scores = self.score_all(query)
-        return rank(self.chunks, scores, top_k=top_k, relevance=scores)
+        return {chunk_id: scores[self._index[chunk_id]] for chunk_id in chunk_ids}
+
+    def search(
+        self, query: str, *, top_k: int = 4, where: MetadataFilter | None = None
+    ) -> list[RetrievedChunk]:
+        scores = self.score_all(query)
+        return rank(self.chunks, scores, top_k=top_k, relevance=scores, where=where)

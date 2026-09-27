@@ -74,7 +74,8 @@ class TestIngest:
         sources = {chunk.source for chunk in load_chunks(docs_dir)}
         assert "README.md" not in sources
         assert "coles_fy25_public_snapshot.md" in sources
-        assert len(sources) == len(list(docs_dir.glob("*.md"))) - 1
+        documents = [*docs_dir.glob("*.md"), *docs_dir.glob("*.pdf")]
+        assert len(sources) == len(documents) - 1  # every document except README.md
 
     def test_chunk_ids_are_unique_and_deterministic(self, docs_dir: Path) -> None:
         first = [chunk.chunk_id for chunk in load_chunks(docs_dir)]

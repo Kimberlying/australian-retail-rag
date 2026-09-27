@@ -1,3 +1,8 @@
+---
+company: Harbourline Retail
+source_type: synthetic
+doc_type: handbook
+---
 # Harbourline Retail store operations handbook
 
 **Document type:** Synthetic portfolio data — Harbourline Retail is a fictional company. Nothing in this document describes a real retailer's procedures.

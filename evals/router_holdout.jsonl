@@ -1,0 +1,38 @@
+{"question": "What were total units sold at HB007 in June 2026?", "route": "sql"}
+{"question": "Which state had the lowest order count in August 2026?", "route": "sql"}
+{"question": "How many home delivery orders did Silver members place?", "route": "sql"}
+{"question": "What is the average basket size in units for click and collect orders?", "route": "sql"}
+{"question": "List the top 3 categories by revenue at HB010.", "route": "sql"}
+{"question": "How many SKUs were out of stock at HB005 on 1 September 2026?", "route": "sql"}
+{"question": "What was the weekly shrink at HB012 in the week starting 2026-07-06?", "route": "sql"}
+{"question": "Compare June and July 2026 revenue for store HB002.", "route": "sql"}
+{"question": "How many orders contained frozen pizza?", "route": "sql"}
+{"question": "Which store in Victoria sold the most baby formula?", "route": "sql"}
+{"question": "What proportion of Gold tier orders were home delivery?", "route": "sql"}
+{"question": "How many distinct stores sold razor cartridges in July 2026?", "route": "sql"}
+{"question": "What is the median number of line items per order?", "route": "sql"}
+{"question": "Which regional store had the highest revenue over the whole period?", "route": "sql"}
+{"question": "What is the Class B recall deadline?", "route": "rag"}
+{"question": "Can I redeem more than A$100 of points in one shop?", "route": "rag"}
+{"question": "Who approves a manual order override above 50%?", "route": "rag"}
+{"question": "What does the store opening checklist require?", "route": "rag"}
+{"question": "How are recalled products blocked at the checkout?", "route": "rag"}
+{"question": "What was Coles' FY25 NPAT?", "route": "rag"}
+{"question": "What dividend did Harbourline pay for FY24?", "route": "rag"}
+{"question": "How many new stores will Harbourline open in FY26?", "route": "rag"}
+{"question": "What training do forklift drivers need?", "route": "rag"}
+{"question": "What are the rules for supplier gifts?", "route": "rag"}
+{"question": "When is the delivery fee waived for Gold members?", "route": "rag"}
+{"question": "What happens to CCTV footage after 30 days?", "route": "rag"}
+{"question": "How is the out-of-stock rate measured?", "route": "rag"}
+{"question": "How many loyalty tiers are there?", "route": "rag"}
+{"question": "How many days of safety stock do medium movers carry?", "route": "rag"}
+{"question": "What happens when a customer returns a recalled product?", "route": "rag"}
+{"question": "Who can view the incident register?", "route": "rag"}
+{"question": "What did Harbourline's revenue grow to in FY25?", "route": "rag"}
+{"question": "Which stores are above the shrink escalation threshold this quarter according to the handbook rule?", "route": "hybrid"}
+{"question": "Using the inventory alert rule, list at-risk SKUs at HB009.", "route": "hybrid"}
+{"question": "Did HB009 meet the 2-hour click and collect picking standard in July 2026 according to the handbook?", "route": "hybrid"}
+{"question": "Under the replenishment policy target, was HB004's out-of-stock rate acceptable on 2 September 2026?", "route": "hybrid"}
+{"question": "According to the shrink rule, should HB002 be escalated?", "route": "hybrid"}
+{"question": "Which fast movers at HB006 breached their reorder point on both snapshots, per the alert rule?", "route": "hybrid"}

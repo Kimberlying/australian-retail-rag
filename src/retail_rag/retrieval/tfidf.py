@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ..models import DocumentChunk, RetrievedChunk
-from .base import load_chunk_file, rank, save_chunks, tokenize
+from .base import MetadataFilter, load_chunk_file, rank, save_chunks, tokenize
 
 
 class TfidfRetriever:
@@ -69,9 +69,11 @@ class TfidfRetriever:
         query_vector = self._query_vector(query)
         return [self._cosine(query_vector, vector) for vector in self._vectors]
 
-    def search(self, query: str, *, top_k: int = 4) -> list[RetrievedChunk]:
+    def search(
+        self, query: str, *, top_k: int = 4, where: MetadataFilter | None = None
+    ) -> list[RetrievedChunk]:
         scores = self.score_all(query)
-        return rank(self.chunks, scores, top_k=top_k, relevance=scores)
+        return rank(self.chunks, scores, top_k=top_k, relevance=scores, where=where)
 
     def save(self, path: Path) -> None:
         save_chunks(self.chunks, path)

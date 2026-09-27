@@ -104,3 +104,42 @@ def refusal_sweep(
             }
         )
     return rows
+
+
+def _cell_matches(gold: object, predicted: object) -> bool:
+    numeric = (int, float)
+    if isinstance(gold, numeric) and isinstance(predicted, numeric):
+        # Tolerate rounding choices: 0.5% relative, or 0.01 absolute for small values.
+        return abs(float(gold) - float(predicted)) <= max(0.01, 0.005 * abs(float(gold)))
+    return str(gold).strip().lower() == str(predicted).strip().lower()
+
+
+def _row_covers(predicted: Sequence[object], gold: Sequence[object]) -> bool:
+    """True if every gold value matches a distinct value in the predicted row."""
+    unused = list(predicted)
+    for value in gold:
+        match = next((i for i, cell in enumerate(unused) if _cell_matches(value, cell)), None)
+        if match is None:
+            return False
+        del unused[match]
+    return True
+
+
+def result_matches(gold: Sequence[Sequence[object]], predicted: Sequence[Sequence[object]]) -> bool:
+    """Execution accuracy with column and rounding tolerance.
+
+    The predicted result must have the same number of rows, and every gold row
+    must be covered by a distinct predicted row that contains all of its values.
+    Extra predicted columns (a store name next to the store id) are allowed, row
+    order is ignored, and numbers match within 0.5% so ``ROUND(x, 1)`` versus an
+    unrounded gold value is not counted as wrong.
+    """
+    if len(gold) != len(predicted):
+        return False
+    remaining = list(predicted)
+    for gold_row in gold:
+        match = next((i for i, row in enumerate(remaining) if _row_covers(row, gold_row)), None)
+        if match is None:
+            return False
+        del remaining[match]
+    return True

@@ -1,3 +1,8 @@
+---
+company: Harbourline Retail
+source_type: synthetic
+doc_type: terms
+---
 # Harbourline Rewards program terms (summary)
 
 **Document type:** Synthetic portfolio data — Harbourline Rewards is a fictional loyalty program invented for this demo. It is not based on any real Australian loyalty scheme.
