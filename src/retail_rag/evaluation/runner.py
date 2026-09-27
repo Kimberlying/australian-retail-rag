@@ -113,6 +113,30 @@ def _sql_correct(
     return metrics.result_matches(gold, predicted)
 
 
+def _credited(example: GoldenExample, chunks: list[tuple[str, str]]) -> list[bool]:
+    """Per-rank relevance where each labelled evidence item is credited at most once.
+
+    Two chunks can match the same label (an overlapping chunk, a repeated figure).
+    Counting both would let DCG exceed the ideal DCG, which assumes one relevant
+    result per label, and push nDCG above 1.
+    """
+    credited: set[int] = set()
+    graded = []
+    for source, text in chunks:
+        match = next(
+            (
+                index
+                for index, evidence in enumerate(example.relevant)
+                if index not in credited and evidence.matches(source, text)
+            ),
+            None,
+        )
+        if match is not None:
+            credited.add(match)
+        graded.append(match is not None)
+    return graded
+
+
 def evaluate_example(
     pipeline: RAGPipeline,
     example: GoldenExample,
@@ -156,7 +180,9 @@ def evaluate_example(
         result.recall = metrics.recall(found)
         result.precision = metrics.precision(relevance)
         result.reciprocal_rank = metrics.reciprocal_rank(relevance)
-        result.ndcg = metrics.ndcg(relevance, n_relevant=len(example.relevant), k=k)
+        result.ndcg = metrics.ndcg(
+            _credited(example, chunks), n_relevant=len(example.relevant), k=k
+        )
         graded = example.route == "rag" or answer.generated_by == "claude"
         if example.answer_must_contain and graded:
             result.answer_correct = not answer.refused and metrics.contains_all(

@@ -101,10 +101,12 @@ jobs:
           --fail-under route_accuracy_holdout=0.90
       - name: Compare against the cross-encoder reranker (informational)
         if: always()
-        run: uv run retail-rag eval --retriever hybrid --reranker cross-encoder --stem eval-rerank
+        run: >
+          uv run retail-rag eval --retriever hybrid --reranker cross-encoder
+          --output-dir reports --stem hybrid_rerank_local
       - name: Publish reports to job summary
         if: always()
-        run: cat reports/eval.md reports/eval-rerank.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat reports/eval.md reports/hybrid_rerank_local.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
