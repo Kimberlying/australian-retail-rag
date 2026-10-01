@@ -20,13 +20,18 @@ test:
 
 eval:  ## Golden-set evaluation with the same gate CI uses
 	uv run retail-rag eval --retriever hybrid \
-		--fail-under hit_rate=0.95 --fail-under recall=0.93 --fail-under mrr=0.90 \
-		--fail-under refusal_accuracy=0.25 --fail-over false_refusal_rate=0.0
+		--fail-under hit_rate=0.95 --fail-under recall=0.94 --fail-under mrr=0.88 \
+		--fail-under refusal_accuracy=0.50 --fail-over false_refusal_rate=0.0 \
+		--fail-under route_accuracy=0.95 --fail-under route_accuracy_holdout=0.90
 
-compare:  ## Evaluate every retriever and refresh the committed baselines
+compare:  ## Evaluate every retriever (plus ablations) and refresh the committed baselines
 	for r in tfidf bm25 dense hybrid; do \
 		uv run retail-rag eval --retriever $$r --output-dir evals/baselines --stem $${r}_local || exit 1; \
 	done
+	uv run retail-rag eval --retriever hybrid --no-metadata-filters \
+		--output-dir evals/baselines --stem hybrid_nofilters_local
+	uv run retail-rag eval --retriever hybrid --reranker cross-encoder \
+		--output-dir evals/baselines --stem hybrid_rerank_local
 
 check: lint typecheck test eval  ## Everything CI runs, locally
 

@@ -236,3 +236,22 @@ def test_eval_cli_fail_over(tmp_path: Path) -> None:
     args = ["eval", "--output-dir", str(tmp_path)]
     assert main([*args, "--fail-over", "false_refusal_rate=0.0"]) == 0
     assert main([*args, "--fail-over", "pass_rate=0.5"]) == 1
+
+
+def test_ndcg_credits_each_label_once(settings: Settings) -> None:
+    """Two chunks matching one label must not push nDCG above 1 (regression)."""
+    chunks = [
+        DocumentChunk("a", "s.md", "growth was 23.3 percent in ecommerce"),
+        DocumentChunk("b", "s.md", "ecommerce growth of 23.3 percent again"),
+    ]
+    example = GoldenExample.model_validate(
+        {
+            "id": "x",
+            "question": "ecommerce growth",
+            "category": "public_fact",
+            "relevant": [{"source": "s.md", "contains": "23.3"}],
+        }
+    )
+    report = run_evaluation(RAGPipeline(TfidfRetriever(chunks), settings), [example], k=2)
+    assert report.results[0].ndcg == 1.0
+    assert report.results[0].precision == 1.0  # precision still counts both chunks

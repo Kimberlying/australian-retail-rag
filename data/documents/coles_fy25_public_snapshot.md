@@ -1,3 +1,9 @@
+---
+company: Coles
+fiscal_year: 2025
+source_type: public
+doc_type: results_snapshot
+---
 # Coles FY25 public snapshot
 
 **Source type:** Public company information

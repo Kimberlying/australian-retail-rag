@@ -1,3 +1,8 @@
+---
+company: Harbourline Retail
+source_type: synthetic
+doc_type: policy
+---
 # Synthetic retail operations policy
 
 **Document type:** Synthetic portfolio data — not a real company policy.

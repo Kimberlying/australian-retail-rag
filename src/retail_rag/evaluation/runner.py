@@ -26,6 +26,13 @@ class ExampleResult(BaseModel):
     category: str
     question: str
     answerable: bool
+    expected_route: str = "rag"
+    route: str = "rag"
+    route_correct: bool | None = None
+    refusal_reason: str | None = None
+    sql_queries: list[str] = Field(default_factory=list)
+    sql_correct: bool | None = None
+    """Execution match against gold SQL (answers written by Claude only)."""
     retrieved: list[dict[str, Any]]
     # retrieval (answerable only)
     hit: float | None = None
@@ -48,9 +55,19 @@ class ExampleResult(BaseModel):
 
     @property
     def passed(self) -> bool:
+        if self.route_correct is False:
+            return False
+        if self.expected_route == "sql":
+            # Offline there is no SQL answer to grade; with Claude it must match the gold result.
+            return self.sql_correct is not False
         if not self.answerable:
             return self.refused
-        return bool(self.hit) and not self.refused and self.answer_correct is not False
+        return (
+            bool(self.hit)
+            and not self.refused
+            and self.answer_correct is not False
+            and self.sql_correct is not False
+        )
 
 
 class EvalReport(BaseModel):
@@ -61,6 +78,7 @@ class EvalReport(BaseModel):
     summary: dict[str, float] = Field(default_factory=dict)
     by_category: dict[str, dict[str, float]] = Field(default_factory=dict)
     results: list[ExampleResult] = Field(default_factory=list)
+    router_holdout_misses: list[dict[str, str]] = Field(default_factory=list)
 
 
 def _git_sha() -> str | None:
@@ -75,6 +93,48 @@ def _git_sha() -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return output.stdout.strip() or None
+
+
+def _sql_correct(
+    pipeline: RAGPipeline, example: GoldenExample, queries: list[str], refused: bool
+) -> bool | None:
+    """Unanswerable: the agent must refuse. Answerable: its last query must match gold SQL."""
+    if pipeline.sql_tool is None:
+        return None
+    if not example.answerable:
+        return refused
+    if example.gold_sql is None or not queries:
+        return False
+    gold = pipeline.sql_tool.run(example.gold_sql).rows
+    try:
+        predicted = pipeline.sql_tool.run(queries[-1]).rows
+    except Exception:  # the agent's final query must itself run cleanly
+        return False
+    return metrics.result_matches(gold, predicted)
+
+
+def _credited(example: GoldenExample, chunks: list[tuple[str, str]]) -> list[bool]:
+    """Per-rank relevance where each labelled evidence item is credited at most once.
+
+    Two chunks can match the same label (an overlapping chunk, a repeated figure).
+    Counting both would let DCG exceed the ideal DCG, which assumes one relevant
+    result per label, and push nDCG above 1.
+    """
+    credited: set[int] = set()
+    graded = []
+    for source, text in chunks:
+        match = next(
+            (
+                index
+                for index, evidence in enumerate(example.relevant)
+                if index not in credited and evidence.matches(source, text)
+            ),
+            None,
+        )
+        if match is not None:
+            credited.add(match)
+        graded.append(match is not None)
+    return graded
 
 
 def evaluate_example(
@@ -100,6 +160,10 @@ def evaluate_example(
         category=example.category,
         question=example.question,
         answerable=example.answerable,
+        expected_route=example.route,
+        route=answer.route,
+        refusal_reason=answer.refusal_reason,
+        sql_queries=answer.sql_queries,
         retrieved=answer.citations,
         answer=answer.answer,
         generated_by=answer.generated_by,
@@ -109,18 +173,25 @@ def evaluate_example(
         input_tokens=answer.usage.get("input_tokens", 0),
         output_tokens=answer.usage.get("output_tokens", 0),
     )
-    if example.answerable:
+    if pipeline.settings.router_enabled and pipeline.sql_tool is not None:
+        result.route_correct = answer.route == example.route
+    if example.answerable and example.route != "sql":
         result.hit = metrics.hit_rate(relevance)
         result.recall = metrics.recall(found)
         result.precision = metrics.precision(relevance)
         result.reciprocal_rank = metrics.reciprocal_rank(relevance)
-        result.ndcg = metrics.ndcg(relevance, n_relevant=len(example.relevant), k=k)
-        if example.answer_must_contain:
+        result.ndcg = metrics.ndcg(
+            _credited(example, chunks), n_relevant=len(example.relevant), k=k
+        )
+        graded = example.route == "rag" or answer.generated_by == "claude"
+        if example.answer_must_contain and graded:
             result.answer_correct = not answer.refused and metrics.contains_all(
                 answer.answer, example.answer_must_contain
             )
+    if example.route != "rag" and answer.generated_by == "claude":
+        result.sql_correct = _sql_correct(pipeline, example, answer.sql_queries, answer.refused)
 
-    if answer.generated_by == "claude":
+    if answer.generated_by == "claude" and example.route == "rag":
         result.citation_validity = metrics.citation_validity(
             answer.answer, [source for source, _ in chunks]
         )
@@ -132,8 +203,13 @@ def evaluate_example(
 
 
 def _aggregate(results: list[ExampleResult]) -> dict[str, float]:
-    answerable = [item for item in results if item.answerable]
-    unanswerable = [item for item in results if not item.answerable]
+    # Retrieval and refusal metrics are about the document route; SQL questions are
+    # graded by route accuracy and execution accuracy instead.
+    answerable = [item for item in results if item.answerable and item.expected_route != "sql"]
+    documents_only = [item for item in answerable if item.expected_route == "rag"]
+    unanswerable = [
+        item for item in results if not item.answerable and item.expected_route == "rag"
+    ]
 
     def avg(field: str, pool: list[ExampleResult]) -> float | None:
         values = [getattr(item, field) for item in pool if getattr(item, field) is not None]
@@ -149,10 +225,12 @@ def _aggregate(results: list[ExampleResult]) -> dict[str, float]:
         "mrr": avg("reciprocal_rank", answerable),
         "ndcg": avg("ndcg", answerable),
         "answer_accuracy": avg("answer_correct", answerable),
-        "false_refusal_rate": avg("refused", answerable) if answerable else None,
+        "false_refusal_rate": avg("refused", documents_only) if documents_only else None,
         "refusal_accuracy": avg("refused", unanswerable) if unanswerable else None,
         "citation_validity": avg("citation_validity", results),
         "faithfulness": avg("faithfulness", results),
+        "route_accuracy": avg("route_correct", results),
+        "sql_execution_accuracy": avg("sql_correct", results),
         "pass_rate": round(metrics.mean([float(item.passed) for item in results]), 4),
         "latency_p50_ms": metrics.percentile([item.latency_ms for item in results], 50),
         "latency_p95_ms": metrics.percentile([item.latency_ms for item in results], 95),

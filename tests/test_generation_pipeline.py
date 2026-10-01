@@ -14,6 +14,8 @@ from retail_rag.models import DocumentChunk, RetrievedChunk
 from retail_rag.pipeline import RAGPipeline
 from retail_rag.retrieval import TfidfRetriever
 
+from .fakes import ScriptedAnthropic, install, message, text_block
+
 
 class FakeAnthropic:
     """Stands in for ``anthropic.Anthropic``; records the request it receives."""
@@ -88,7 +90,14 @@ class TestClaudeGeneration:
         assert result.usage == {"input_tokens": 120, "output_tokens": 30}
         request = FakeAnthropic.last_request
         assert request["model"] == llm_settings.anthropic_model
-        assert request["system"] == generation.SYSTEM_PROMPT
+        assert request["system"] == [
+            {
+                "type": "text",
+                "text": generation.SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},  # stable prefix is cacheable
+            }
+        ]
+        assert request["fallbacks"] == "default"
         assert "<question>What was growth?</question>" in request["messages"][0]["content"]
 
     def test_model_refusal_text_is_flagged(
@@ -165,3 +174,83 @@ class TestPipeline:
         result = RAGPipeline(TfidfRetriever(toy_chunks), llm_settings).ask("sales growth")
         assert result.generated_by == "local_fallback"
         assert "23.3" in result.answer
+
+
+class TestStreamingAndCaching:
+    def test_stream_yields_deltas_then_final_generation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        llm_settings: Settings,
+        evidence: list[RetrievedChunk],
+    ) -> None:
+        final = message(text_block("Growth was 23.3%."), cache_read=640)
+        fake = install(monkeypatch, ScriptedAnthropic([final], deltas=["Growth ", "was 23.3%."]))
+        events = list(generation.stream_with_claude("What was growth?", evidence, llm_settings))
+        assert [event.kind for event in events] == ["text", "text", "done"]
+        assert "".join(event.text for event in events) == "Growth was 23.3%."
+        done = events[-1].generation
+        assert done is not None
+        assert not done.refused
+        assert done.usage["cache_read_input_tokens"] == 640
+        assert fake.requests[0]["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_stream_refusal_replaces_partial_text(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        llm_settings: Settings,
+        evidence: list[RetrievedChunk],
+    ) -> None:
+        final = message(text_block("partial"), stop_reason="refusal")
+        install(monkeypatch, ScriptedAnthropic([final], deltas=["partial"]))
+        events = list(generation.stream_with_claude("q", evidence, llm_settings))
+        done = events[-1].generation
+        assert done is not None
+        assert done.refused
+        assert done.text == REFUSAL_TEXT
+
+    def test_stream_yields_nothing_without_key(
+        self, settings: Settings, evidence: list[RetrievedChunk]
+    ) -> None:
+        assert list(generation.stream_with_claude("q", evidence, settings)) == []
+
+    def test_pipeline_stream_with_claude(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        llm_settings: Settings,
+        toy_chunks: list[DocumentChunk],
+    ) -> None:
+        final = message(text_block("Growth was 23.3%. Sources: sales.md"))
+        install(monkeypatch, ScriptedAnthropic([final], deltas=["Growth was ", "23.3%."]))
+        events = list(RAGPipeline(TfidfRetriever(toy_chunks), llm_settings).stream("sales growth"))
+        assert [event["event"] for event in events] == ["meta", "token", "token", "done"]
+        assert events[-1]["generated_by"] == "claude"
+        assert events[-1]["answer"].startswith("Growth was 23.3%")
+
+    def test_pipeline_stream_falls_back_on_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        llm_settings: Settings,
+        toy_chunks: list[DocumentChunk],
+    ) -> None:
+        def boom(*_: Any, **__: Any) -> Any:
+            raise ConnectionError("network down")
+            yield  # pragma: no cover - makes this a generator
+
+        monkeypatch.setattr("retail_rag.pipeline.stream_with_claude", boom)
+        events = list(RAGPipeline(TfidfRetriever(toy_chunks), llm_settings).stream("sales growth"))
+        assert events[-1]["generated_by"] == "local_fallback"
+        assert "23.3" in events[-1]["answer"]
+
+    def test_pipeline_stream_refusal_without_llm_call(
+        self, settings: Settings, toy_chunks: list[DocumentChunk]
+    ) -> None:
+        events = list(RAGPipeline(TfidfRetriever(toy_chunks), settings).stream("zzz qqq"))
+        assert events[-1]["refused"] is True
+        assert events[-1]["refusal_reason"] == "evidence_gate"
+        assert events[1] == {"event": "token", "text": REFUSAL_TEXT}
+
+    def test_page_numbers_reach_prompt_and_preview(self) -> None:
+        chunk = DocumentChunk("p", "report.pdf", "Revenue A$138.6m", {"page": 3})
+        retrieved = [RetrievedChunk(chunk=chunk, score=0.5)]
+        assert 'page="3"' in build_context(retrieved)
+        assert "report.pdf, p.3" in generation.local_preview("q", retrieved)

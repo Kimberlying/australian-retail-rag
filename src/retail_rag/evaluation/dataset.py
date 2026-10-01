@@ -17,10 +17,18 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 Category = Literal[
     "public_fact",
     "synthetic_policy",
+    "synthetic_report",
     "paraphrase",
     "multi_doc",
     "unanswerable",
+    "structured_data",
+    "hybrid",
 ]
+Route = Literal["rag", "sql", "hybrid"]
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.lower().split())
 
 
 class RelevantEvidence(BaseModel):
@@ -33,7 +41,8 @@ class RelevantEvidence(BaseModel):
     def matches(self, source: str, text: str) -> bool:
         if source != self.source:
             return False
-        return self.contains is None or self.contains.lower() in text.lower()
+        # Whitespace-insensitive, so a label survives PDF line wrapping and re-chunking.
+        return self.contains is None or _squash(self.contains) in _squash(text)
 
 
 class GoldenExample(BaseModel):
@@ -43,12 +52,20 @@ class GoldenExample(BaseModel):
     answerable: bool = True
     relevant: list[RelevantEvidence] = Field(default_factory=list)
     answer_must_contain: list[str] = Field(default_factory=list)
+    route: Route = Field(default="rag", description="Where the router should send the question.")
+    gold_sql: str | None = Field(
+        default=None,
+        description="Reference query whose result an answer from the database must match.",
+    )
     notes: str | None = None
 
     @model_validator(mode="after")
     def _check_labels(self) -> GoldenExample:
-        if self.answerable and not self.relevant:
+        needs_documents = self.route in ("rag", "hybrid")
+        if self.answerable and needs_documents and not self.relevant:
             raise ValueError(f"{self.id}: answerable examples need at least one relevant item")
+        if self.answerable and self.route != "rag" and not self.gold_sql:
+            raise ValueError(f"{self.id}: answerable {self.route} examples need gold_sql")
         if not self.answerable and self.answer_must_contain:
             raise ValueError(f"{self.id}: unanswerable examples cannot require answer text")
         return self

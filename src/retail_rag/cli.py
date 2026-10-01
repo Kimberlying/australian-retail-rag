@@ -4,15 +4,19 @@ import argparse
 import json
 import logging
 import sys
+import tempfile
 from pathlib import Path
+from typing import cast
 
-from .config import REPO_ROOT, get_settings
+from .config import REPO_ROOT, Settings, get_settings
 from .ingest import build_index, load_chunks
 from .logging_config import configure_logging
-from .pipeline import RAGPipeline
+from .pipeline import RAGPipeline, answer_payload
 from .retrieval import create_retriever
+from .sql import SQLTool, build_database
 
 DEFAULT_GOLDEN_SET = REPO_ROOT / "evals" / "golden_set.jsonl"
+ROUTER_HOLDOUT = REPO_ROOT / "evals" / "router_holdout.jsonl"
 DEFAULT_REPORT_DIR = REPO_ROOT / "reports"
 
 
@@ -40,6 +44,9 @@ def _parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--top-k", type=int, default=settings.top_k)
     query_parser.add_argument("--index", type=Path, default=settings.index_path)
     query_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    query_parser.add_argument(
+        "--stream", action="store_true", help="Print the answer as it is generated"
+    )
 
     serve_parser = subparsers.add_parser("serve", help="Start the FastAPI server")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -53,6 +60,21 @@ def _parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--chunk-overlap", type=int, default=settings.chunk_overlap)
     eval_parser.add_argument(
         "--retriever", choices=["tfidf", "bm25", "dense", "hybrid"], default=settings.retriever
+    )
+    eval_parser.add_argument(
+        "--reranker", choices=["none", "cross-encoder"], default=settings.reranker
+    )
+    eval_parser.add_argument(
+        "--metadata-filters",
+        action=argparse.BooleanOptionalAction,
+        default=settings.metadata_filters,
+        help="Restrict retrieval to the company / fiscal year a question names",
+    )
+    eval_parser.add_argument(
+        "--router",
+        action=argparse.BooleanOptionalAction,
+        default=settings.router_enabled,
+        help="Route questions to documents, the SQL database, or both",
     )
     eval_parser.add_argument(
         "--min-score",
@@ -95,12 +117,19 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
     # Per-query INFO logs would drown the report; failures are still logged.
     logging.getLogger("retail_rag.pipeline").setLevel(logging.WARNING)
-    settings = get_settings().model_copy(update={"min_score": args.min_score})
+    settings = get_settings().model_copy(
+        update={
+            "min_score": args.min_score,
+            "reranker": args.reranker,
+            "metadata_filters": args.metadata_filters,
+            "router_enabled": args.router,
+        }
+    )
     examples = load_golden_set(args.golden, docs_dir=args.docs)
-    # Build a fresh in-memory index so every run is reproducible from source documents.
+    # Build a fresh in-memory index (and SQL database) so every run is reproducible
+    # from the source documents and the seeded data generator.
     chunks = load_chunks(args.docs, chunk_size=args.chunk_size, overlap=args.chunk_overlap)
     retriever = create_retriever(args.retriever, chunks, settings)
-    pipeline = RAGPipeline(retriever, settings)
 
     judge = None
     if args.judge:
@@ -108,23 +137,35 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
         judge = FaithfulnessJudge(settings)
 
-    report = run_evaluation(
-        pipeline,
-        examples,
-        k=args.k,
-        judge=judge,
-        config={
-            "retriever": retriever.name,
-            "embedding_model": (
-                settings.embedding_model if args.retriever in ("dense", "hybrid") else None
-            ),
-            "chunk_size": args.chunk_size,
-            "chunk_overlap": args.chunk_overlap,
-            "min_score": pipeline.min_score,
-            "n_chunks": len(chunks),
-            "model": settings.anthropic_model if settings.llm_enabled else None,
-        },
-    )
+    with tempfile.TemporaryDirectory() as workdir:
+        sql_tool = SQLTool(build_database(Path(workdir) / "retail.db"))
+        pipeline = RAGPipeline(retriever, settings, sql_tool=sql_tool)
+        report = run_evaluation(
+            pipeline,
+            examples,
+            k=args.k,
+            judge=judge,
+            config={
+                "retriever": retriever.name,
+                "embedding_model": (
+                    settings.embedding_model if args.retriever in ("dense", "hybrid") else None
+                ),
+                "chunk_size": args.chunk_size,
+                "chunk_overlap": args.chunk_overlap,
+                "reranker": settings.reranker_model if settings.reranker != "none" else None,
+                "metadata_filters": settings.metadata_filters,
+                "router": settings.router_enabled,
+                "min_score": pipeline.min_score,
+                "n_chunks": len(chunks),
+                "model": settings.anthropic_model if settings.llm_enabled else None,
+            },
+        )
+    if args.router and ROUTER_HOLDOUT.is_file():
+        from .evaluation.routing import router_holdout  # noqa: PLC0415
+
+        accuracy, misses = router_holdout(ROUTER_HOLDOUT)
+        report.summary["route_accuracy_holdout"] = accuracy
+        report.router_holdout_misses = misses
     json_path, md_path = write_reports(report, args.output_dir, stem=args.stem)
     print(render_markdown(report))
     print(f"Reports written to {json_path} and {md_path}")
@@ -140,6 +181,40 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_query(args: argparse.Namespace, settings: Settings) -> int:
+    pipeline = RAGPipeline.from_index(args.index, settings)
+    if args.stream:
+        payload: dict[str, object] = {}
+        for event in pipeline.stream(args.question, top_k=args.top_k):
+            if event["event"] == "token":
+                print(event["text"], end="", flush=True)
+            elif event["event"] == "done":
+                payload = event
+        print()
+        _print_details(payload)
+        return 0
+    result = answer_payload(pipeline.ask(args.question, top_k=args.top_k))
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(result["answer"])
+        _print_details(result)
+    return 0
+
+
+def _print_details(payload: dict[str, object]) -> None:
+    print(f"\nRoute: {payload.get('route')} · generated by: {payload.get('generated_by')}")
+    if payload.get("refused"):
+        print(f"Refused ({payload.get('refusal_reason')}).")
+    if payload.get("sql_queries"):
+        print("SQL:")
+        for statement in cast("list[str]", payload["sql_queries"]):
+            print(f"  {statement}")
+    if payload.get("citations"):
+        print("Citations:")
+        print(json.dumps(payload["citations"], ensure_ascii=False, indent=2))
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911 - one exit code per command
     configure_logging()
     args = _parser().parse_args(argv)
@@ -148,28 +223,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911 - one exit code
     if args.command == "ingest":
         retriever = build_index(args.docs, args.index, settings)
         print(f"Indexed {len(retriever.chunks)} chunks with {retriever.name} -> {args.index}")
+        database = build_database(settings.sql_db_path)
+        print(f"Built the synthetic operational database -> {database}")
         return 0
 
     if args.command == "query":
         if not args.index.exists():
             print(f"Index not found: {args.index}. Run `retail-rag ingest` first.", file=sys.stderr)
             return 2
-        result = RAGPipeline.from_index(args.index, settings).ask(args.question, top_k=args.top_k)
-        if args.json:
-            payload = {
-                "question": result.question,
-                "answer": result.answer,
-                "citations": result.citations,
-                "generated_by": result.generated_by,
-                "refused": result.refused,
-                "latency_ms": result.latency_ms,
-            }
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-        else:
-            print(result.answer)
-            print("\nCitations:")
-            print(json.dumps(result.citations, ensure_ascii=False, indent=2))
-        return 0
+        return _cmd_query(args, settings)
 
     if args.command == "serve":
         try:

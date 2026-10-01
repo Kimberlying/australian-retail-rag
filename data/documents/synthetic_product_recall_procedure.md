@@ -1,3 +1,8 @@
+---
+company: Harbourline Retail
+source_type: synthetic
+doc_type: procedure
+---
 # Harbourline Retail product recall and withdrawal procedure
 
 **Document type:** Synthetic portfolio data — a fictional internal procedure for the fictional retailer Harbourline Retail. It is not legal advice and does not describe any regulator's actual requirements.

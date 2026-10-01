@@ -1,3 +1,8 @@
+---
+company: Harbourline Retail
+source_type: synthetic
+doc_type: policy
+---
 # Harbourline Retail inventory replenishment policy
 
 **Document type:** Synthetic portfolio data — a fictional policy for the fictional retailer Harbourline Retail, written to pair with the synthetic orders and inventory dataset planned for a later version of this project.

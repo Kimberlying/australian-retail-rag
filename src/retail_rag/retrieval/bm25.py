@@ -5,7 +5,7 @@ from collections import Counter
 from collections.abc import Iterable
 
 from ..models import DocumentChunk, RetrievedChunk
-from .base import content_tokens, rank
+from .base import MetadataFilter, content_tokens, rank
 
 
 class BM25Retriever:
@@ -49,5 +49,7 @@ class BM25Retriever:
             scores.append(score)
         return scores
 
-    def search(self, query: str, *, top_k: int = 4) -> list[RetrievedChunk]:
-        return rank(self.chunks, self.score_all(query), top_k=top_k)
+    def search(
+        self, query: str, *, top_k: int = 4, where: MetadataFilter | None = None
+    ) -> list[RetrievedChunk]:
+        return rank(self.chunks, self.score_all(query), top_k=top_k, where=where)
